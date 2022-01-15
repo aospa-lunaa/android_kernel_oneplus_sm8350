@@ -38,6 +38,8 @@
         qcom,mdss-dsi-panel-blackness-level = <1023>;
         qcom,mdss-pan-physical-width-dimension = <67>;
         qcom,mdss-pan-physical-height-dimension = <149>;
+    	qcom,ulps-enabled;
+	    qcom,suspend-ulps-enabled;
         qcom,esd-check-enabled;
         qcom,mdss-dsi-panel-status-check-mode = "reg_read";
         qcom,mdss-dsi-panel-status-command = [06 01 00 01 05 00 02 0A 00
@@ -754,7 +756,6 @@
     qcom,mdss-dsi-reset-sequence = <1 10>, <0 10>, <1 10>;
     //qcom,platform-panel-vout-gpio = <&tlmm 25 0>;
     qcom,platform-panel-vddr-aod-en-gpio = <&tlmm 6 0>;
-    qcom,ulps-enabled;
     qcom,dsi-dyn-clk-enable;
     qcom,dsi-dyn-clk-list = <830000000 800000000>;
     qcom,dsi-select-clocks = "mux_byte_clk0", "mux_pixel_clk0",
