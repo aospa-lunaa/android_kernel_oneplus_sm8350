@@ -149,3 +149,9 @@ x509.genkey
 
 # vendor device tree directories
 arch/arm/boot/dts/vendor
+
+# Kernel building script
+kernel-build.sh
+
+# Final zip'd output
+Gato*.zip
