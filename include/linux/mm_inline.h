@@ -5,32 +5,44 @@
 #include <linux/huge_mm.h>
 #include <linux/swap.h>
 
+#ifndef arch_try_cmpxchg
+#define arch_try_cmpxchg(_ptr, _oldp, _new) \
+({ \
+	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \
+	___r = arch_cmpxchg((_ptr), ___o, (_new)); \
+	if (unlikely(___r != ___o)) \
+		*___op = ___r; \
+	likely(___r == ___o); \
+})
+#define try_cmpxchg arch_try_cmpxchg
+#endif /* arch_try_cmpxchg */
+
 /**
- * page_is_file_cache - should the page be on a file LRU or anon LRU?
+ * page_is_file_lru - should the page be on a file LRU or anon LRU?
  * @page: the page to test
  *
- * Returns 1 if @page is page cache page backed by a regular filesystem,
- * or 0 if @page is anonymous, tmpfs or otherwise ram or swap backed.
- * Used by functions that manipulate the LRU lists, to sort a page
- * onto the right LRU list.
+ * Returns 1 if @page is a regular filesystem backed page cache page or a lazily
+ * freed anonymous page (e.g. via MADV_FREE).  Returns 0 if @page is a normal
+ * anonymous page, a tmpfs page or otherwise ram or swap backed page.  Used by
+ * functions that manipulate the LRU lists, to sort a page onto the right LRU
+ * list.
  *
  * We would like to get this info without a page flag, but the state
  * needs to survive until the page is last deleted from the LRU, which
  * could be as far down as __page_cache_release.
  */
-static inline int page_is_file_cache(struct page *page)
+static inline int page_is_file_lru(struct page *page)
 {
 	return !PageSwapBacked(page);
 }
 
 static __always_inline void __update_lru_size(struct lruvec *lruvec,
 				enum lru_list lru, enum zone_type zid,
-				long nr_pages)
+				int nr_pages)
 {
 	struct pglist_data *pgdat = lruvec_pgdat(lruvec);
 
 	lockdep_assert_held(&pgdat->lru_lock);
-	WARN_ON_ONCE(nr_pages != (int)nr_pages);
 
 	__mod_lruvec_state(lruvec, NR_LRU_BASE + lru, nr_pages);
 	__mod_zone_page_state(&pgdat->node_zones[zid],
@@ -39,27 +51,12 @@ static __always_inline void __update_lru_size(struct lruvec *lruvec,
 
 static __always_inline void update_lru_size(struct lruvec *lruvec,
 				enum lru_list lru, enum zone_type zid,
-				int nr_pages)
+				long nr_pages)
 {
 	__update_lru_size(lruvec, lru, zid, nr_pages);
 #ifdef CONFIG_MEMCG
 	mem_cgroup_update_lru_size(lruvec, lru, zid, nr_pages);
 #endif
-}
-
-/**
- * page_lru_base_type - which LRU list type should a page be on?
- * @page: the page to test
- *
- * Used for LRU list index arithmetic.
- *
- * Returns the base LRU type - file or anon - @page should be on.
- */
-static inline enum lru_list page_lru_base_type(struct page *page)
-{
-	if (page_is_file_cache(page))
-		return LRU_INACTIVE_FILE;
-	return LRU_INACTIVE_ANON;
 }
 
 /**
@@ -94,12 +91,12 @@ static __always_inline enum lru_list page_lru(struct page *page)
 	VM_BUG_ON_PAGE(PageActive(page) && PageUnevictable(page), page);
 
 	if (PageUnevictable(page))
-		lru = LRU_UNEVICTABLE;
-	else {
-		lru = page_lru_base_type(page);
-		if (PageActive(page))
-			lru += LRU_ACTIVE;
-	}
+		return LRU_UNEVICTABLE;
+
+	lru = page_is_file_lru(page) ? LRU_INACTIVE_FILE : LRU_INACTIVE_ANON;
+	if (PageActive(page))
+		lru += LRU_ACTIVE;
+
 	return lru;
 }
 
@@ -178,7 +175,7 @@ static inline bool lru_gen_is_active(struct lruvec *lruvec, int gen)
 static inline void lru_gen_update_size(struct lruvec *lruvec, struct page *page,
 				       int old_gen, int new_gen)
 {
-	int type = page_is_file_cache(page);
+	int type = page_is_file_lru(page);
 	int zone = page_zonenum(page);
 	int delta = hpage_nr_pages(page);
 	enum lru_list lru = type * LRU_INACTIVE_FILE;
@@ -226,7 +223,7 @@ static inline bool lru_gen_add_page(struct lruvec *lruvec, struct page *page, bo
 	unsigned long seq;
 	unsigned long flags;
 	int gen = page_lru_gen(page);
-	int type = page_is_file_cache(page);
+	int type = page_is_file_lru(page);
 	int zone = page_zonenum(page);
 	struct lru_gen_struct *lrugen = &lruvec->lrugen;
 
@@ -246,8 +243,7 @@ static inline bool lru_gen_add_page(struct lruvec *lruvec, struct page *page, bo
 	if (PageActive(page))
 		seq = lrugen->max_seq;
 	else if ((type == LRU_GEN_ANON && !PageSwapCache(page)) ||
-		 (PageReclaim(page) &&
-		  (PageDirty(page) || PageWriteback(page))))
+		 (PageReclaim(page) && (PageDirty(page) || PageWriteback(page))))
 		seq = lrugen->min_seq[type] + 1;
 	else
 		seq = lrugen->min_seq[type];
@@ -278,7 +274,7 @@ static inline bool lru_gen_del_page(struct lruvec *lruvec, struct page *page, bo
 	VM_WARN_ON_ONCE_PAGE(PageActive(page), page);
 	VM_WARN_ON_ONCE_PAGE(PageUnevictable(page), page);
 
-	/* for migrate_page_states() */
+	/* for page_migrate_flags() */
 	flags = !reclaiming && lru_gen_is_active(lruvec, gen) ? BIT(PG_active) : 0;
 	flags = set_mask_bits(&page->flags, LRU_GEN_MASK, flags);
 	gen = ((flags & LRU_GEN_MASK) >> LRU_GEN_PGOFF) - 1;

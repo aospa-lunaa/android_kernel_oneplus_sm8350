@@ -88,7 +88,7 @@ pages can be evicted regardless of swap constraints. These three
 variables are monotonically increasing.
 
 Generation numbers are truncated into ``order_base_2(MAX_NR_GENS+1)``
-bits in order to fit into the gen counter in ``folio->flags``. Each
+bits in order to fit into the gen counter in ``page->flags``. Each
 truncated generation number is an index to ``lrugen->lists[]``. The
 sliding window technique is used to track at least ``MIN_NR_GENS`` and
 at most ``MAX_NR_GENS`` generations. The gen counter stores a value
@@ -100,7 +100,7 @@ times through file descriptors is in tier ``order_base_2(N)``. Unlike
 generations, tiers do not have dedicated ``lrugen->lists[]``. In
 contrast to moving across generations, which requires the LRU lock,
 moving across tiers only involves atomic operations on
-``folio->flags`` and therefore has a negligible cost. A feedback loop
+``page->flags`` and therefore has a negligible cost. A feedback loop
 modeled after the PID controller monitors refaults over all the tiers
 from anon and file types and decides which tiers from which types to
 evict or protect.
